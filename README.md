@@ -8,7 +8,7 @@ Upgrading NFT contracts to Cadence 1.0
 
 Applies few rules are applied: 
 
-- LS suggestions 
+- Applies LS suggestions 
 - External Interface entitlements
 - Internal Interfaces changed to be compatible with external ones
 - Metadataview / Resolver updates
