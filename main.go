@@ -2,67 +2,41 @@ package main
 
 import (
 	"fmt"
-	"github.com/bluesign/cadenceUpgrader/format"
-	"github.com/bluesign/cadenceUpgrader/tools"
+	"github.com/bluesign/cadenceUpgrader/fixer"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 )
 
 func main() {
 
-	if len(os.Args) < 2 {
-		fmt.Println("Missing parameter, provide file name!")
-		return
-	}
-	data_raw, err := os.ReadFile(os.Args[1])
-	if err != nil {
-		fmt.Println("Can't read file:", os.Args[1])
-		panic(err)
-	}
+	filepath.Walk("./contracts",
+		func(spath string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
 
-	code := string(data_raw)
-	var fixed bool = false
+			if strings.HasSuffix(spath, ".cdc") {
 
-	for {
-		parserFixer := tools.NewParseFixer(code)
-		fixed, code, _ = parserFixer.ParseAndFix()
-		if fixed {
-			print("!!! parser fix")
-			continue
-		}
-		break
-	}
+				data_raw, _ := os.ReadFile(spath)
+				code := string(data_raw)
 
-	if err != nil {
-		fmt.Println(err)
-		panic("can't fix parsing errors, aborting.")
-	}
+				newPath := strings.Replace(spath, "contracts/", "contractsV1/", 1)
 
-	astFixer := tools.NewAstFixer(code)
+				identifier := path.Base(newPath)
+				libPath := fmt.Sprintf("./standardsV1/%s", identifier)
+				_, err := os.ReadFile(libPath)
+				if err != nil {
+					_, err = os.ReadFile(newPath)
+					if err != nil {
+						fixer.FixFile(spath, newPath, code)
+					}
+				}
 
-	for {
-		fixed, code = astFixer.WalkAndFix()
-		if fixed {
-			continue
-		}
+			}
 
-		//checker
-		fixed, code = astFixer.CheckAndFix()
-		if fixed {
-			continue
-		}
-
-		break
-
-	}
-
-	newFileNameFormatted := strings.Replace(os.Args[1], ".cdc", "_1_Formatted.cdc", 1)
-	newFileName := strings.Replace(os.Args[1], ".cdc", "_1.cdc", 1)
-
-	var output = format.PrettyCode(string(code), 100, true)
-	os.Create(newFileName)
-	os.WriteFile(newFileName, []byte(code), 0644)
-	os.Create(newFileNameFormatted)
-	os.WriteFile(newFileNameFormatted, []byte(output), 0644)
+			return nil
+		})
 
 }
