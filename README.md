@@ -3,10 +3,11 @@
 
 UPDATE: 
 
-- put your contracts in to contracts folder ( imports should be string imports, see examples )
-- run :) 
+- put your contracts in to `contracts` directory ( imports should be string imports, see examples )
+- run
+- upgraded contracts will be on `contractsV1` directory 
 
-it should parse all dependencies and updgrade all needed 
+it should parse all dependencies and upgrade all needed 
 
 
 PS: I wrote this in like 2-3 hours, not 100% but works pretty good. some samples in https://github.com/bluesign/cadenceUpgrader/tree/main/test

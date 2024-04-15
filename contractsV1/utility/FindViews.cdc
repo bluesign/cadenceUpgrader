@@ -233,7 +233,7 @@ contract FindViews{
 			if !self.cap.check(){ 
 				panic("The capability is not valid.")
 			}
-			let viewResolver = (self.cap.borrow()!).borrowViewResolver(id: self.id)
+			let viewResolver = (self.cap.borrow()!).borrowViewResolver(id: self.id)!
 			let display = MetadataViews.getDisplay(viewResolver!) ?? panic("MetadataViews Display View is not implemented on this NFT.")
 			let nftCollectionData = MetadataViews.getNFTCollectionData(viewResolver!) ?? panic("MetadataViews NFTCollectionData View is not implemented on this NFT.")
 			self.uuid = viewResolver.uuid
@@ -292,7 +292,7 @@ contract FindViews{
 		
 		access(all)
 		fun getViewResolver(): &{ViewResolver.Resolver}{ 
-			return self.cap.borrow()?.borrowViewResolver(id: self.id) ?? panic("The capability of view pointer is not linked.")
+			return self.cap.borrow()?.borrowViewResolver(id: self.id)! ?? panic("The capability of view pointer is not linked.")
 		}
 		
 		access(all)
@@ -350,7 +350,7 @@ contract FindViews{
 			if !self.cap.check(){ 
 				panic("The capability is not valid.")
 			}
-			let viewResolver = (self.cap.borrow()!).borrowViewResolver(id: self.id)
+			let viewResolver = (self.cap.borrow()!).borrowViewResolver(id: self.id)!
 			let display = MetadataViews.getDisplay(viewResolver!) ?? panic("MetadataViews Display View is not implemented on this NFT.")
 			let nftCollectionData = MetadataViews.getNFTCollectionData(viewResolver!) ?? panic("MetadataViews NFTCollectionData View is not implemented on this NFT.")
 			self.nounce = FindViews.getNounce(viewResolver!)
@@ -360,7 +360,7 @@ contract FindViews{
 		
 		access(all)
 		fun getViewResolver(): &{ViewResolver.Resolver}{ 
-			return self.cap.borrow()?.borrowViewResolver(id: self.id) ?? panic("The capability of view pointer is not linked.")
+			return self.cap.borrow()?.borrowViewResolver(id: self.id)! ?? panic("The capability of view pointer is not linked.")
 		}
 		
 		access(all)
