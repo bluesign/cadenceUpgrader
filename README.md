@@ -1,5 +1,14 @@
 # cadenceUpgrader
 
+
+UPDATE: 
+
+- put your contracts in to contracts folder ( imports should be string imports, see examples )
+- run :) 
+
+it should parse all dependencies and updgrade all needed 
+
+
 PS: I wrote this in like 2-3 hours, not 100% but works pretty good. some samples in https://github.com/bluesign/cadenceUpgrader/tree/main/test
 
 **NOTE: This doesn't add new entitlements, as is pretty unsecure for complex contracts. **
