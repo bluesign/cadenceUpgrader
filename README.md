@@ -1,7 +1,18 @@
 # cadenceUpgrader
 
+UPDATE:
 
-UPDATE: 
+Ran on mainnet for ~3000 contracts.
+
+## Remaining problems: ( needs manual fix )
+
+- capabilities on private paths
+- impure operation on view context 
+- dereferencing structs ( metadata etc )
+- array mutation
+
+
+## Usage: 
 
 - put your contracts in to `contracts` directory ( imports should be string imports, see examples )
 - run
