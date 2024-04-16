@@ -41,8 +41,20 @@ func FixFile(spath string, newFileNameFormatted string, code string) {
 		break
 
 	}
-
-	var output = PrettyCode(string(code), 100, true)
+	var Wrap = func(f func()) func() {
+		return func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("RECOVERED - %v\r\n", r)
+				}
+			}()
+			f()
+		}
+	}
+	output := string(code)
+	Wrap(func() {
+		output = PrettyCode(string(code), 100, true)
+	})
 	dir := path.Dir(newFileNameFormatted)
 	os.MkdirAll(dir, 0777)
 	os.Create(newFileNameFormatted)
@@ -275,11 +287,18 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 
 	for _, e := range checkerError.Errors {
 		fmt.Println("V:", e)
+		fmt.Printf("T: %T\n", e)
+
 		switch v := e.(type) {
+
 		case *sema.InvalidUnaryOperandError:
 			//ignore
 			continue
 		case *sema.NotDeclaredMemberError:
+
+			if parser.IsHardKeyword(v.Expression.Identifier.String()) {
+				fixer.ReplaceElement(v.Expression.Identifier, "_"+v.Expression.Identifier.String())
+			}
 
 			if strings.HasSuffix(v.Type.String(), "&Account") {
 				fmt.Println("Fixing &Account")
@@ -291,14 +310,43 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 					fixer.ReplaceElement(v.Expression.Identifier, "storage.capacity")
 				case "save":
 					fixer.ReplaceElement(v.Expression.Identifier, "storage.save")
+				case "copy":
+					fixer.ReplaceElement(v.Expression.Identifier, "storage.copy")
+				case "load":
+					fixer.ReplaceElement(v.Expression.Identifier, "storage.load")
 				case "borrow":
 					fixer.ReplaceElement(v.Expression.Identifier, "storage.borrow")
 				case "getCapability":
 					elem := FindElement(program, v.StartPosition(), ast.ElementTypeInvocationExpression)
 					invocation := elem.(*ast.InvocationExpression)
+					replacement := strings.ReplaceAll(invocation.String(), "getCapability", "capabilities.get") + "!"
+
+					if !strings.Contains(invocation.String(), "<") {
+						replacement = strings.ReplaceAll(invocation.String(), "getCapability", "capabilities.get_<YOUR_TYPE>") + "!"
+						pos := v.EndPosition(nil)
+						next_invocation, _ := FindElement(program, pos, ast.ElementTypeInvocationExpression).(*ast.InvocationExpression)
+
+						search := 100
+						for next_invocation != nil && invocation.String() == next_invocation.String() && search > 0 {
+							pos.Offset += 1
+							search--
+							next_invocation, _ = FindElement(program, pos, ast.ElementTypeInvocationExpression).(*ast.InvocationExpression)
+						}
+						fmt.Println("next:", next_invocation)
+
+						if next_invocation != nil && strings.HasSuffix(next_invocation.InvokedExpression.String(), ".borrow") {
+							replacement = strings.ReplaceAll(invocation.String(),
+								"getCapability",
+								fmt.Sprintf("capabilities.get<%s>", next_invocation.TypeArguments[0].String()),
+							) + "!"
+						}
+					}
+
+					//panic("s")
+
 					fixer.ReplaceElement(
 						elem,
-						strings.ReplaceAll(invocation.String(), "getCapability", "capabilities.get")+"!",
+						replacement,
 					)
 				case "link":
 					endPos := v.EndPos
@@ -309,8 +357,8 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 						var storagePath = elem.Arguments[1].String()
 						var linkType = elem.TypeArguments[0].String()
 						fixer.capabilityIndex++
-						data := fmt.Sprintf("var _capForLinked%d = self.account.capabilities.storage.issue<%s>(%s)\n", fixer.capabilityIndex, linkType, storagePath)
-						data = data + fmt.Sprintf("self.account.capabilities.publish(_capForLinked%d , at:%s)\n", fixer.capabilityIndex, publicPath)
+						data := fmt.Sprintf("(fun():Capability?{\nvar cap = self.account.capabilities.storage.issue<%s>(%s)\n", linkType, storagePath)
+						data = data + fmt.Sprintf("self.account.capabilities.publish(cap , at:%s)\nreturn cap\n})()", publicPath)
 						data = data
 						fixer.ReplaceElement(elem, data)
 					}
@@ -319,6 +367,11 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 
 		case *sema.NotDeclaredError:
 			fmt.Println("Fixing Missing Declarations:", v.Name)
+
+			if parser.IsHardKeyword(v.Name) {
+				fixer.ReplaceElement(v, "_"+v.Name)
+				break
+			}
 
 			if v.Name == "ViewResolver" {
 				//add import
@@ -352,6 +405,13 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 			}
 			fixer.appliedFix = false
 
+		case *sema.InvalidNestedDeclarationError:
+			inner := fixer.code[v.StartPosition().Offset : v.EndPosition(nil).Offset+1]
+			fmt.Println("InvalidNestedDeclarationError", inner)
+			if v.NestedDeclarationKind != common.DeclarationKindEnum {
+				fixer.ReplaceElement(v, "interface "+inner)
+			}
+
 		case *sema.InvalidInterfaceTypeError:
 			fmt.Println("Fixing Interface Type")
 			fmt.Println("Actual Type:", v.ActualType.QualifiedString())
@@ -377,14 +437,38 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 				if strings.HasSuffix(expression.InvokedExpression.String(), "createEmptyCollection") {
 					pre := fixer.code[:expression.ArgumentsStartPos.Offset+1]
 					post := fixer.code[expression.ArgumentsStartPos.Offset+1:]
-					fixer.code = pre + fmt.Sprintf("nftType: Type<@Collection>()") + post
+
+					parts := strings.Split(expression.InvokedExpression.String(), ".")
+					target := parts[0] + "."
+					if target == "self." {
+						target = ""
+					}
+					fixer.code = pre + fmt.Sprintf("nftType: Type<@%sCollection>()", target) + post
 					fixer.appliedFix = true
 				}
+
+				if strings.HasSuffix(expression.InvokedExpression.String(), "createEmptyVault") {
+					pre := fixer.code[:expression.ArgumentsStartPos.Offset+1]
+					post := fixer.code[expression.ArgumentsStartPos.Offset+1:]
+					parts := strings.Split(expression.InvokedExpression.String(), ".")
+					target := parts[0] + "."
+					if target == "self." {
+						target = ""
+					}
+
+					fixer.code = pre + fmt.Sprintf("vaultType: Type<@%sVault>()", target) + post
+					fixer.appliedFix = true
+				}
+
 			}
 
 		case *sema.PurityError:
 			fmt.Println("\nFixing Purity")
 			elem := FindElement(program, v.StartPosition(), ast.ElementTypeInvocationExpression)
+			if elem == nil {
+				//TODO: check me
+				break
+			}
 			invocation := elem.(*ast.InvocationExpression)
 			if invocation != nil {
 				fmt.Println(invocation.String())
@@ -395,7 +479,7 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 					if _, ok := fixer.needsPurity[invoked[len(invoked)-1]]; !ok {
 						fmt.Println("setting to fix purity", invoked[len(invoked)-1])
 						fixer.needsPurity[invoked[len(invoked)-1]] = true
-						fixer.appliedFix = true
+						//fixer.appliedFix = true
 					}
 
 				}
@@ -404,6 +488,10 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 		case *sema.UnauthorizedReferenceAssignmentError:
 			fmt.Println("Fixing Reference Entitlements")
 			elem := FindElement(program, v.StartPosition(), ast.ElementTypeAssignmentStatement)
+			if elem == nil {
+				//TODO: handle me
+				break
+			}
 			assignment := elem.(*ast.AssignmentStatement)
 
 			var target = assignment.Target
@@ -433,47 +521,151 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 			}
 			fixer.ReplaceElement(v, replacement)
 
+		case *sema.MissingArgumentLabelError:
+			fmt.Println("Missing Labels")
+			replacement := v.ExpectedArgumentLabel
+			if v.ExpectedArgumentLabel != "" {
+				replacement = replacement + ":"
+			}
+			fixer.InsertElement(v, replacement)
+
 		case *sema.TypeMismatchWithDescriptionError:
 			inner := fixer.code[v.StartPosition().Offset : v.EndPosition(nil).Offset+1]
 			fmt.Println("TypeMismatchWithDescriptionError", v.ActualType, v.ExpectedTypeDescription, inner)
-			panic("d")
+			//panic("d")
 
+		case *sema.InvalidTypeArgumentCountError:
+			inner := fixer.code[v.StartPosition().Offset : v.EndPosition(nil).Offset+1]
+			fmt.Println("InvalidTypeArgumentCountError", v.TypeArgumentCount, inner)
+			if v.TypeParameterCount == 0 && v.TypeArgumentCount == 1 {
+				//remove
+				fixer.ReplaceElement(v, "")
+				fixer.code = strings.ReplaceAll(fixer.code, ".borrow<>", ".borrow")
+
+			}
 		case *sema.TypeMismatchError:
 			inner := fixer.code[v.StartPosition().Offset : v.EndPosition(nil).Offset+1]
 			fmt.Println("TypeMismatchError", v.ActualType.QualifiedString(), v.ExpectedType.QualifiedString(), inner)
 
-			_, isCasting := v.Expression.(*ast.CastingExpression)
-			if isCasting {
-				fmt.Println("Fixing Casting")
-				replacement := strings.ReplaceAll(inner, v.ActualType.QualifiedString(), v.ExpectedType.QualifiedString())
-				fmt.Println(inner)
-				fmt.Println(replacement)
-				fixer.ReplaceElement(v, replacement)
+			if v.ActualType.QualifiedString() == v.ExpectedType.QualifiedString() {
+				break
+			}
+			elem := FindElement(program, v.StartPosition(), ast.ElementTypeCastingExpression)
+			if elem != nil {
+				fmt.Printf("%T\n", elem)
+				casting, isCasting := elem.(*ast.CastingExpression)
+				if isCasting {
+					fmt.Println("Fixing Casting")
+					fmt.Println(casting.String())
+					fmt.Println(inner)
+					fmt.Println(v.ExpectedType.QualifiedString())
+					fmt.Println(v.ActualType.QualifiedString())
+					replacement := v.ExpectedType.QualifiedString()
+
+					if _, ok := casting.Expression.(*ast.ReferenceExpression); ok {
+						replacement = v.ActualType.QualifiedString()
+						fmt.Println("ref")
+						if !strings.HasPrefix(replacement, "&") {
+							replacement = "&" + replacement
+						}
+					}
+					fmt.Println(replacement)
+					fmt.Println(casting.TypeAnnotation.String())
+					if casting.TypeAnnotation.String() != replacement {
+						fixer.ReplaceElement(casting.TypeAnnotation, replacement)
+					}
+					//panic("s")
+					break
+				}
 			}
 
 			if v.ActualType.QualifiedString() == v.ExpectedType.QualifiedString()+"?" {
 				if !strings.Contains(inner, "??") {
 					fmt.Println("force")
-					fixer.ReplaceElement(v, inner+"!")
+					//fixer.ReplaceElement(v, inner+"!")
 				}
 			}
 
 			if v.ActualType.QualifiedString() == "&"+v.ExpectedType.QualifiedString() {
 				fmt.Println("Dereferencing")
 				fixer.ReplaceElement(v, "*"+inner)
+				break
 			}
+
+			//force cast
+		//	fmt.Println("FORCED CAST")
+		//if !strings.Contains(inner, "fun ") {
+		//	fixer.ReplaceElement(v, fmt.Sprintf("%s as! %s", inner, v.ExpectedType.QualifiedString()))
+		//}
 
 		case *sema.TypeAnnotationRequiredError:
 			fmt.Println("TypeAnnotationRequiredError")
 			fmt.Println(v.Cause)
 			if strings.Contains(v.Cause, "cannot infer type from reference expression") {
 				elem := FindElement(program, v.StartPosition(), ast.ElementTypeCastingExpression)
-				casting := elem.(*ast.CastingExpression)
-				if casting.Operation == ast.OperationForceCast {
+				casting, isCasting := elem.(*ast.CastingExpression)
+				if isCasting && (casting.Operation == ast.OperationForceCast || casting.Operation == ast.OperationFailableCast) {
 					casting.Operation = ast.OperationCast
 					fixer.ReplaceElement(casting, casting.String())
 				}
+				break
 			}
+			if strings.Contains(v.Cause, "cannot infer type from dictionary") {
+				//	elem := FindElement(program, v.StartPosition(), ast.ElementTypeDictionaryExpression)
+				//dictionary, ok := elem.(*ast.DictionaryExpression)
+				if ok {
+					//fixer.ReplaceElement(dictionary, fmt.Sprintf("(%s as {String:String})", dictionary.String()))
+				}
+				break
+			}
+
+		case *sema.InvalidNestedResourceMoveError:
+			fmt.Println("ConformanceError")
+			fmt.Println(v)
+			inner := fixer.code[v.StartPosition().Offset : v.EndPosition(nil).Offset+1]
+
+			fmt.Println(inner)
+
+			elem := FindElement(program, v.StartPosition(), ast.ElementTypeCastingExpression)
+			if elem == nil {
+				//TODO: check me
+				break
+			}
+			casting, isCasting := elem.(*ast.CastingExpression)
+			if isCasting {
+				fmt.Println("Fixing nested resource move")
+				//replacement := strings.ReplaceAll(inner, v.ActualType.QualifiedString(), v.ExpectedType.QualifiedString())
+				fmt.Println(casting.String())
+				fmt.Printf("t2: %T\n", casting.Expression)
+
+				if referenceExpression, ok := casting.Expression.(*ast.ReferenceExpression); ok {
+					fmt.Printf("%T\n", referenceExpression.Expression)
+					fmt.Println(referenceExpression.Expression.String())
+					if forced, ok := referenceExpression.Expression.(*ast.ForceExpression); ok {
+						fmt.Println("=========")
+						fmt.Printf("%T\n", forced.Expression)
+						fmt.Println("%s", forced.Expression.String())
+
+						fmt.Println(forced.Expression.String())
+						fmt.Println("it is forced")
+						replace := fixer.code[forced.StartPosition().Offset:forced.EndPosition(nil).Offset]
+						fixer.ReplaceElement(forced, replace)
+					}
+				}
+
+				//fmt.Println(replacement)
+				//fixer.ReplaceElement(v, replacement)
+			}
+
+			/*
+				_, isCasting := v.Expression.(*ast.CastingExpression)
+				if isCasting {
+					fmt.Println("Fixing Casting")
+					replacement := strings.ReplaceAll(inner, v.ActualType.QualifiedString(), v.ExpectedType.QualifiedString())
+					fmt.Println(inner)
+					fmt.Println(replacement)
+					fixer.ReplaceElement(v, replacement)
+				}*/
 
 		case *sema.ConformanceError:
 			fmt.Println("ConformanceError")
@@ -490,7 +682,7 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 					} else if missing.Identifier.String() == "getLength" {
 						newCode = newCode + "{\n return self.ownedNFTs.length \n}"
 					} else if missing.Identifier.String() == "createEmptyVault" {
-						newCode = newCode + "{\n return <-create Vault() \n}"
+						newCode = newCode + "{\n return <-create Vault(balance:0.0) \n}"
 					} else if missing.Identifier.String() == "isAvailableToWithdraw" {
 						newCode = newCode + "{\n return self.balance>=amount \n}"
 					} else {
@@ -515,16 +707,23 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 				fmt.Println("InterfaceMember", mismatch.InterfaceMember.ContainerType.QualifiedString())
 
 				if interfaceContract != compositeContract {
+
+					fmt.Println(interfaceContract)
+					libPath := fmt.Sprintf("./standardsV1/%s.cdc", interfaceContract)
+					_, err := os.ReadFile(libPath)
 					fmt.Println("different contract")
-					oldcode := fixer.code
-					fixer.code = ReplaceFunction(fixer.code, program, mismatch.CompositeMember, mismatch.InterfaceMember)
-					fixer.appliedFix = fixer.code != oldcode
+					if err == nil {
+						fmt.Println("fixing to stardard")
+						oldcode := fixer.code
+						fixer.code = ReplaceFunction(fixer.code, program, mismatch.CompositeMember, mismatch.InterfaceMember, false)
+						fixer.appliedFix = fixer.code != oldcode
+					}
 					break
 				} else {
 					fmt.Println("same contract")
 					//reverse
 					oldcode := fixer.code
-					fixer.code = ReplaceFunction(fixer.code, program, mismatch.InterfaceMember, mismatch.CompositeMember)
+					fixer.code = ReplaceFunction(fixer.code, program, mismatch.InterfaceMember, mismatch.CompositeMember, true)
 					fixer.appliedFix = fixer.code != oldcode
 					break
 				}
@@ -547,10 +746,19 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 }
 
 func (fixer *AstFixer) ReplaceElement(old ast.HasPosition, replacement string) {
-	fmt.Println(fixer.code[old.StartPosition().Offset : old.EndPosition(nil).Offset+1])
+	fmt.Println("find:", fixer.code[old.StartPosition().Offset:old.EndPosition(nil).Offset+1])
 	fmt.Println("replace:", replacement)
 	pre := fixer.code[:old.StartPosition().Offset]
 	post := fixer.code[old.EndPosition(nil).Offset+1:]
+	fixer.appliedFix = true
+	fixer.code = fmt.Sprintf("%s%s%s", pre, replacement, post)
+}
+
+func (fixer *AstFixer) InsertElement(old ast.HasPosition, replacement string) {
+	fmt.Println("find:", fixer.code[old.StartPosition().Offset:old.EndPosition(nil).Offset+1])
+	fmt.Println("replace:", replacement)
+	pre := fixer.code[:old.StartPosition().Offset]
+	post := fixer.code[old.StartPosition().Offset:]
 	fixer.appliedFix = true
 	fixer.code = fmt.Sprintf("%s%s%s", pre, replacement, post)
 }
@@ -760,10 +968,30 @@ func AddFunctionToComposite(data string, program *ast.Program, code string, posi
 	if element != nil {
 		composite := element.(*ast.CompositeDeclaration)
 		functions := composite.Members.Functions()
-		var endPosition = functions[len(functions)-1].EndPosition(nil)
-		pre := data[:endPosition.Offset+1]
-		post := data[endPosition.Offset+1:]
-		return pre + "\n\n" + code + "\n\n" + post
+		if len(functions) > 1 {
+			var endPosition = functions[len(functions)-1].EndPosition(nil)
+			pre := data[:endPosition.Offset+1]
+			post := data[endPosition.Offset+1:]
+			return pre + "\n\n" + code + "\n\n" + post
+		} else {
+			//panic("d")
+			fields := composite.Members.Fields()
+			if len(fields) > 0 {
+				var endPosition = fields[len(fields)-1].EndPosition(nil)
+				pre := data[:endPosition.Offset+1]
+				post := data[endPosition.Offset+1:]
+				return pre + "\n\n" + code + "\n\n" + post
+			} else {
+				//TODO: handle me
+				var endPosition = composite.EndPosition(nil)
+				pre := data[:endPosition.Offset]
+				post := data[endPosition.Offset:]
+				return pre + "\n\n" + code + "\n\n" + post
+				fmt.Println("TODO: handle me")
+			}
+
+		}
+
 	}
 	return data
 }
@@ -786,7 +1014,7 @@ func AddImportToProgram(data string, location common.Location, program *ast.Prog
 	return fmt.Sprintf("%s\nimport %s from \"%s\"\n%s", pre, imported, relPath, post)
 }
 
-func ReplaceFunction(data string, program *ast.Program, compositeMember *sema.Member, interfaceMember *sema.Member) string {
+func ReplaceFunction(data string, program *ast.Program, compositeMember *sema.Member, interfaceMember *sema.Member, same bool) string {
 
 	element := FindElement(program, compositeMember.Identifier.StartPosition(), ast.ElementTypeFunctionDeclaration)
 
@@ -808,11 +1036,14 @@ func ReplaceFunction(data string, program *ast.Program, compositeMember *sema.Me
 			code = code + "{"
 		}
 
+		if same && !strings.Contains(code, "view") && strings.Contains(inner, "view") {
+			return data
+		}
 		fmt.Println(code)
 		fmt.Println(inner)
 
 		return pre + code + post
 	}
-	panic("cant replace")
+	//TODO: handle : panic("cant replace")
 	return data
 }

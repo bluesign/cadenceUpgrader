@@ -51,13 +51,15 @@ func (fixer *ParseFixer) ParseAndFix() (bool, string, *ast.Program) {
 			fmt.Println("Removing type restriction")
 			pre := fixer.code[:v.StartPos.Offset-1]
 			if strings.HasSuffix(pre, "AnyResource") {
+				fmt.Println(pre)
 				post := fixer.code[v.StartPos.Offset-1:]
 				pre = pre[:len(pre)-11]
 				fixer.code = pre + post
 
 			} else if strings.HasSuffix(pre, "AnyStruct") {
+				fmt.Println(pre)
 				post := fixer.code[v.StartPos.Offset-1:]
-				pre = pre[:len(pre)-10]
+				pre = pre[:len(pre)-9]
 				fixer.code = pre + post
 			} else {
 				post := fixer.code[v.EndPos.Offset:]
@@ -65,6 +67,14 @@ func (fixer *ParseFixer) ParseAndFix() (bool, string, *ast.Program) {
 				fixer.code = pre + post
 			}
 			fixer.appliedFix = true
+
+		case *parser.MissingCommaInParameterListError:
+			pre := fixer.code[:v.StartPosition().Offset]
+			post := fixer.code[v.EndPosition(nil).Offset:]
+			fmt.Println(pre)
+			fixer.code = pre + "," + post
+			fixer.appliedFix = true
+			break
 
 		case *parser.SyntaxError:
 
@@ -76,7 +86,15 @@ func (fixer *ParseFixer) ParseAndFix() (bool, string, *ast.Program) {
 				fixer.appliedFix = true
 				break
 			}
-
+			if strings.Contains(v.Message, "expected identifier for parameter name") {
+				fmt.Println("fix keyword")
+				fmt.Println(v.Message)
+				pre := fixer.code[:v.StartPosition().Offset]
+				post := fixer.code[v.EndPosition(nil).Offset:]
+				fixer.code = pre + "_" + post
+				fixer.appliedFix = true
+				break
+			}
 			if strings.Contains(v.Message, "expected identifier after start of variable declaration, got keyword") {
 				fmt.Println("fix keyword")
 				fmt.Println(v.Message)
@@ -153,6 +171,7 @@ func (fixer *ParseFixer) ParseAndFix() (bool, string, *ast.Program) {
 				213 |     access(all) fun forEachCatalogKey(_ function: ((String): Bool)) {
 			|   */
 			fmt.Println(fixer.path)
+			fmt.Println(v.Error())
 			panic(v)
 		}
 

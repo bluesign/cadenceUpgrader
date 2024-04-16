@@ -10,13 +10,20 @@ import (
 )
 
 func main() {
+	filter := ""
+	if len(os.Args) > 1 {
+		filter = os.Args[1]
+	}
 
 	filepath.Walk("./contracts",
 		func(spath string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
-
+			if !strings.Contains(spath, filter) {
+				return nil
+			}
+			fmt.Println(spath)
 			if strings.HasSuffix(spath, ".cdc") {
 
 				data_raw, _ := os.ReadFile(spath)
@@ -29,7 +36,7 @@ func main() {
 				_, err := os.ReadFile(libPath)
 				if err != nil {
 					_, err = os.ReadFile(newPath)
-					if err != nil {
+					if err != nil || filter != "" {
 						fixer.FixFile(spath, newPath, code)
 					}
 				}
