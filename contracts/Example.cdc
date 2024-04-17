@@ -9,9 +9,9 @@
 *
 */
 
-import "NonFungibleToken" 
-import "MetadataViews"
-import "ViewResolver" 
+import NonFungibleToken from "./utility/NonFungibleToken.cdc"
+import MetadataViews from "./utility/MetadataViews.cdc"
+import ViewResolver from "./utility/ViewResolver.cdc"
 
 pub contract ExampleNFT: NonFungibleToken, ViewResolver {
 
@@ -399,7 +399,7 @@ pub contract ExampleNFT: NonFungibleToken, ViewResolver {
             self.CollectionPublicPath,
             target: self.CollectionStoragePath
         )
-
+ 
         // Create a Minter resource and save it to storage
         let minter <- create NFTMinter()
         self.account.save(<-minter, to: self.MinterStoragePath)

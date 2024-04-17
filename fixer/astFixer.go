@@ -26,35 +26,22 @@ func FixFile(spath string, newFileNameFormatted string, code string) {
 	}
 
 	astFixer := NewAstFixer(spath, code, false)
+
 	for {
-		fixed, code = astFixer.WalkAndFix()
+
+		//processor
+		fixed, code = astFixer.Process(spath)
 		if fixed {
 			continue
 		}
 
-		//checker
-		fixed, code = astFixer.CheckAndFix(spath)
-		if fixed {
-			continue
-		}
-
+		//panic("deniz")
 		break
 
 	}
-	var Wrap = func(f func()) func() {
-		return func() {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Printf("RECOVERED - %v\r\n", r)
-				}
-			}()
-			f()
-		}
-	}
-	output := string(code)
-	Wrap(func() {
-		output = PrettyCode(string(code), 100, true)
-	})
+	output := PrettyCode(string(code), 100, true)
+	fmt.Println("formatted")
+
 	dir := path.Dir(newFileNameFormatted)
 	os.MkdirAll(dir, 0777)
 	os.Create(newFileNameFormatted)
@@ -195,17 +182,20 @@ func PrepareChecker(
 		nil,
 		config,
 	)
+	fmt.Println(err)
 	must(err)
 
 	return checker, must
 }
 
 type AstFixer struct {
-	appliedFix bool
-	program    *ast.Program
-	checkers   map[common.Location]*sema.Checker
-	codes      map[common.Location][]byte
-
+	appliedFix       bool
+	program          *ast.Program
+	checkers         map[common.Location]*sema.Checker
+	codes            map[common.Location][]byte
+	addedImports     map[string]bool
+	currentChecker   *sema.Checker
+	contractName     string
 	code             string
 	path             string
 	replaceFunctions bool
@@ -229,6 +219,7 @@ func NewAstFixer(path string, code string, replaceFunctions bool) *AstFixer {
 		program:          program,
 		codes:            make(map[common.Location][]byte),
 		checkers:         make(map[common.Location]*sema.Checker),
+		addedImports:     make(map[string]bool),
 		code:             code,
 		path:             path,
 		replaceFunctions: replaceFunctions,
@@ -239,37 +230,101 @@ func NewAstFixer(path string, code string, replaceFunctions bool) *AstFixer {
 	}
 }
 
-func (fixer *AstFixer) updateProgram() {
+func (fixer *AstFixer) updateProgram(location common.Location) func(error) {
+	must := mustClosure(location, fixer.codes)
+
 	program, err := parser.ParseProgram(nil, []byte(fixer.code), parser.Config{})
-	if err != nil {
-		panic(err)
-	}
+	fixer.codes[location] = []byte(fixer.code)
+	must(err)
+
 	fixer.program = program
 	fixer.appliedFix = false
+
+	return must
 }
 
 func (fixer *AstFixer) WalkAndFix() (bool, string) {
-	fixer.updateProgram()
+	fixer.updateProgram(common.NewStringLocation(nil, fixer.path))
 	fixer.program.Walk(fixer.walker)
 	return fixer.appliedFix, fixer.code
 }
 
-func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
-	fixer.updateProgram()
+func (fixer *AstFixer) typeToString(t sema.Type) string {
+	prefix := ""
+	if t.IsResourceType() {
+		prefix = "@"
+	}
+	return prefix + t.QualifiedString()
+}
+
+func (fixer *AstFixer) findExpressionType(e ast.Expression) sema.Type {
+
+	checker := fixer.currentChecker
+	if checker == nil || checker.Elaboration == nil {
+		return nil
+	}
+	switch ex := e.(type) {
+	case *ast.CreateExpression:
+		if checker.Elaboration.InvocationExpressionTypes(ex.InvocationExpression).ReturnType == nil {
+			return nil
+		}
+		fmt.Println("type: ", checker.Elaboration.InvocationExpressionTypes(ex.InvocationExpression).ReturnType.QualifiedString())
+		return checker.Elaboration.InvocationExpressionTypes(ex.InvocationExpression).ReturnType
+
+	case *ast.InvocationExpression:
+		if checker.Elaboration.InvocationExpressionTypes(ex).ReturnType == nil {
+			return nil
+		}
+		fmt.Println("type: ", checker.Elaboration.InvocationExpressionTypes(ex).ReturnType.QualifiedString())
+		return checker.Elaboration.InvocationExpressionTypes(ex).ReturnType
+
+	case *ast.ForceExpression:
+		t := fixer.findExpressionType(ex.Expression)
+		switch it := t.(type) {
+		case *sema.OptionalType:
+			return it.Type
+		}
+		return t
+
+	case *ast.CastingExpression:
+		return checker.Elaboration.CastingExpressionTypes(ex).TargetType
+
+	case *ast.IndexExpression:
+		return checker.Elaboration.IndexExpressionTypes(ex).ResultType
+	case *ast.BinaryExpression:
+		return checker.Elaboration.BinaryExpressionTypes(ex).ResultType
+	}
+
+	return nil
+}
+
+func (fixer *AstFixer) Process(path string) (bool, string) {
+
+	fixer.appliedFix = true
+	for fixer.appliedFix {
+		fixer.WalkAndFix()
+		if fixer.appliedFix {
+			continue
+		}
+		fixer.CheckAndFixOne(path)
+	}
+
+	return fixer.appliedFix, fixer.code
+}
+
+func (fixer *AstFixer) CheckAndFixOne(path string) (bool, string) {
 	var checker *sema.Checker
-	var must func(error)
+	must := fixer.updateProgram(common.NewStringLocation(nil, path))
 
 	fixer.codes = make(map[common.Location][]byte)
 	fixer.checkers = make(map[common.Location]*sema.Checker)
 
 	memberAccountAccess := make(map[common.Location]map[common.Location]struct{})
-	location := common.NewStringLocation(nil, path)
 	standardLibraryValues := stdlib.DefaultStandardLibraryValues(nil)
 
-	program, must := PrepareProgram([]byte(fixer.code), location, fixer.codes)
 	checker, _ = PrepareChecker(
-		program,
-		location,
+		fixer.program,
+		common.NewStringLocation(nil, path),
 		fixer.checkers,
 		fixer.codes,
 		memberAccountAccess,
@@ -286,14 +341,14 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 	}
 
 	for _, e := range checkerError.Errors {
-		fmt.Println("V:", e)
-		fmt.Printf("T: %T\n", e)
+		fmt.Printf("T: %T V: %s\n", e, e)
 
 		switch v := e.(type) {
 
 		case *sema.InvalidUnaryOperandError:
 			//ignore
-			continue
+			break
+
 		case *sema.NotDeclaredMemberError:
 
 			if parser.IsHardKeyword(v.Expression.Identifier.String()) {
@@ -317,20 +372,20 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 				case "borrow":
 					fixer.ReplaceElement(v.Expression.Identifier, "storage.borrow")
 				case "getCapability":
-					elem := FindElement(program, v.StartPosition(), ast.ElementTypeInvocationExpression)
+					elem := FindElement(fixer.program, v.StartPosition(), ast.ElementTypeInvocationExpression)
 					invocation := elem.(*ast.InvocationExpression)
 					replacement := strings.ReplaceAll(invocation.String(), "getCapability", "capabilities.get") + "!"
 
 					if !strings.Contains(invocation.String(), "<") {
 						replacement = strings.ReplaceAll(invocation.String(), "getCapability", "capabilities.get_<YOUR_TYPE>") + "!"
 						pos := v.EndPosition(nil)
-						next_invocation, _ := FindElement(program, pos, ast.ElementTypeInvocationExpression).(*ast.InvocationExpression)
+						next_invocation, _ := FindElement(fixer.program, pos, ast.ElementTypeInvocationExpression).(*ast.InvocationExpression)
 
 						search := 100
 						for next_invocation != nil && invocation.String() == next_invocation.String() && search > 0 {
 							pos.Offset += 1
 							search--
-							next_invocation, _ = FindElement(program, pos, ast.ElementTypeInvocationExpression).(*ast.InvocationExpression)
+							next_invocation, _ = FindElement(fixer.program, pos, ast.ElementTypeInvocationExpression).(*ast.InvocationExpression)
 						}
 						fmt.Println("next:", next_invocation)
 
@@ -351,16 +406,27 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 				case "link":
 					endPos := v.EndPos
 					endPos.Offset = endPos.Offset + 1
-					elem := FindElement(program, endPos, ast.ElementTypeInvocationExpression).(*ast.InvocationExpression)
+					elem := FindElement(fixer.program, endPos, ast.ElementTypeInvocationExpression).(*ast.InvocationExpression)
 					if elem.InvokedExpression.String() == "self.account.link" {
 						var publicPath = elem.Arguments[0].String()
 						var storagePath = elem.Arguments[1].String()
 						var linkType = elem.TypeArguments[0].String()
 						fixer.capabilityIndex++
-						data := fmt.Sprintf("(fun():Capability?{\nvar cap = self.account.capabilities.storage.issue<%s>(%s)\n", linkType, storagePath)
-						data = data + fmt.Sprintf("self.account.capabilities.publish(cap , at:%s)\nreturn cap\n})()", publicPath)
-						data = data
-						fixer.ReplaceElement(elem, data)
+						data := fmt.Sprintf("var capability_%d = self.account.capabilities.storage.issue<%s>(%s)\n", fixer.capabilityIndex, linkType, storagePath)
+						data = data + fmt.Sprintf("self.account.capabilities.publish(capability_%d , at:%s)\n", fixer.capabilityIndex, publicPath)
+						declare, isDeclare := FindElement(fixer.program, endPos, ast.ElementTypeVariableDeclaration).(*ast.VariableDeclaration)
+						assign, isAssign := FindElement(fixer.program, endPos, ast.ElementTypeAssignmentStatement).(*ast.AssignmentStatement)
+						if isDeclare {
+							predeclared := strings.Split(declare.String(), declare.Transfer.Operation.Operator())[0]
+							data = data + fmt.Sprintf("%s %s capability_%d\n", predeclared, declare.Transfer.Operation.Operator(), fixer.capabilityIndex)
+							fixer.ReplaceElement(declare, data)
+						} else if isAssign {
+							data = data + fmt.Sprintf("%s %s capability_%d\n", assign.Target.String(), assign.Transfer.Operation.Operator(), fixer.capabilityIndex)
+							fixer.ReplaceElement(assign, data)
+						} else {
+							fixer.ReplaceElement(elem, data)
+						}
+
 					}
 				}
 			}
@@ -375,11 +441,13 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 
 			if v.Name == "ViewResolver" {
 				//add import
-				fmt.Println("Adding import")
+				if _, ok := fixer.addedImports["ViewResolver"]; !ok {
+					fixer.code = AddImportToProgram(fixer.code, checker.Location, fixer.program, "ViewResolver")
+					fixer.addedImports["ViewResolver"] = true
+					fixer.appliedFix = true
+					break
+				}
 
-				fixer.code = AddImportToProgram(fixer.code, checker.Location, program, "ViewResolver")
-				fixer.appliedFix = true
-				break
 			}
 
 			if v.Name == "MetadataViews.Resolver" {
@@ -403,7 +471,6 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 				fixer.ReplaceElement(v, "revertibleRandom<UInt64>")
 				break
 			}
-			fixer.appliedFix = false
 
 		case *sema.InvalidNestedDeclarationError:
 			inner := fixer.code[v.StartPosition().Offset : v.EndPosition(nil).Offset+1]
@@ -414,8 +481,6 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 
 		case *sema.InvalidInterfaceTypeError:
 			fmt.Println("Fixing Interface Type")
-			fmt.Println("Actual Type:", v.ActualType.QualifiedString())
-			fmt.Println("Expected Type:", v.ExpectedType.QualifiedString())
 
 			prefix := ""
 			if fixer.code[v.StartPosition().Offset] == '(' {
@@ -431,7 +496,7 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 		case *sema.InsufficientArgumentsError:
 			fmt.Println("Fixing Arguments")
 
-			elem := FindElement(program, v.StartPosition(), ast.ElementTypeInvocationExpression)
+			elem := FindElement(fixer.program, v.StartPosition(), ast.ElementTypeInvocationExpression)
 			if elem != nil {
 				expression := elem.(*ast.InvocationExpression)
 				if strings.HasSuffix(expression.InvokedExpression.String(), "createEmptyCollection") {
@@ -464,7 +529,7 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 
 		case *sema.PurityError:
 			fmt.Println("\nFixing Purity")
-			elem := FindElement(program, v.StartPosition(), ast.ElementTypeInvocationExpression)
+			elem := FindElement(fixer.program, v.StartPosition(), ast.ElementTypeInvocationExpression)
 			if elem == nil {
 				//TODO: check me
 				break
@@ -473,21 +538,34 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 			if invocation != nil {
 				fmt.Println(invocation.String())
 				invoked := strings.Split(invocation.InvokedExpression.String(), ".")
-				fmt.Println(invoked)
 
-				if len(invoked) > 1 && invoked[1] != "append" {
-					if _, ok := fixer.needsPurity[invoked[len(invoked)-1]]; !ok {
-						fmt.Println("setting to fix purity", invoked[len(invoked)-1])
-						fixer.needsPurity[invoked[len(invoked)-1]] = true
-						//fixer.appliedFix = true
+				if len(invoked) > 1 {
+					if invoked[len(invoked)-1] == "append" {
+						//TODO: maybe concat
+
+					} else {
+						if _, ok := fixer.needsPurity[invoked[len(invoked)-1]]; !ok {
+							fmt.Println("setting to fix purity: ", invoked[len(invoked)-1])
+							fixer.needsPurity[invoked[len(invoked)-1]] = true
+							fixer.appliedFix = true
+						}
 					}
+				}
 
+				if len(invoked) == 1 {
+					//struct
+					structName := invoked[0]
+					if _, ok := fixer.needsPurity[structName]; !ok {
+						fmt.Println("setting to fix purity for struct: ", structName)
+						fixer.needsPurity[structName] = true
+						fixer.appliedFix = true
+					}
 				}
 			}
 
 		case *sema.UnauthorizedReferenceAssignmentError:
 			fmt.Println("Fixing Reference Entitlements")
-			elem := FindElement(program, v.StartPosition(), ast.ElementTypeAssignmentStatement)
+			elem := FindElement(fixer.program, v.StartPosition(), ast.ElementTypeAssignmentStatement)
 			if elem == nil {
 				//TODO: handle me
 				break
@@ -504,12 +582,12 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 				}
 			default:
 				fmt.Printf("%T\n", t)
-				panic("d")
+
 			}
 
 		case *sema.NestedReferenceError:
 			fmt.Println("Fixing Nested Reference")
-			elem := FindElement(program, v.StartPosition(), ast.ElementTypeCastingExpression)
+			elem := FindElement(fixer.program, v.StartPosition(), ast.ElementTypeCastingExpression)
 			casting := elem.(*ast.CastingExpression)
 			fixer.ReplaceElement(v, casting.Expression.String()[1:])
 
@@ -550,27 +628,19 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 			if v.ActualType.QualifiedString() == v.ExpectedType.QualifiedString() {
 				break
 			}
-			elem := FindElement(program, v.StartPosition(), ast.ElementTypeCastingExpression)
+			elem := FindElement(fixer.program, v.StartPosition(), ast.ElementTypeCastingExpression)
 			if elem != nil {
-				fmt.Printf("%T\n", elem)
 				casting, isCasting := elem.(*ast.CastingExpression)
 				if isCasting {
 					fmt.Println("Fixing Casting")
-					fmt.Println(casting.String())
-					fmt.Println(inner)
-					fmt.Println(v.ExpectedType.QualifiedString())
-					fmt.Println(v.ActualType.QualifiedString())
 					replacement := v.ExpectedType.QualifiedString()
 
 					if _, ok := casting.Expression.(*ast.ReferenceExpression); ok {
 						replacement = v.ActualType.QualifiedString()
-						fmt.Println("ref")
 						if !strings.HasPrefix(replacement, "&") {
 							replacement = "&" + replacement
 						}
 					}
-					fmt.Println(replacement)
-					fmt.Println(casting.TypeAnnotation.String())
 					if casting.TypeAnnotation.String() != replacement {
 						fixer.ReplaceElement(casting.TypeAnnotation, replacement)
 					}
@@ -581,8 +651,8 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 
 			if v.ActualType.QualifiedString() == v.ExpectedType.QualifiedString()+"?" {
 				if !strings.Contains(inner, "??") {
-					fmt.Println("force")
-					//fixer.ReplaceElement(v, inner+"!")
+					fmt.Println("forcing")
+					fixer.ReplaceElement(v, inner+"!")
 				}
 			}
 
@@ -592,17 +662,10 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 				break
 			}
 
-			//force cast
-		//	fmt.Println("FORCED CAST")
-		//if !strings.Contains(inner, "fun ") {
-		//	fixer.ReplaceElement(v, fmt.Sprintf("%s as! %s", inner, v.ExpectedType.QualifiedString()))
-		//}
-
 		case *sema.TypeAnnotationRequiredError:
-			fmt.Println("TypeAnnotationRequiredError")
-			fmt.Println(v.Cause)
+			fmt.Println("TypeAnnotationRequiredError", v)
 			if strings.Contains(v.Cause, "cannot infer type from reference expression") {
-				elem := FindElement(program, v.StartPosition(), ast.ElementTypeCastingExpression)
+				elem := FindElement(fixer.program, v.StartPosition(), ast.ElementTypeCastingExpression)
 				casting, isCasting := elem.(*ast.CastingExpression)
 				if isCasting && (casting.Operation == ast.OperationForceCast || casting.Operation == ast.OperationFailableCast) {
 					casting.Operation = ast.OperationCast
@@ -620,13 +683,9 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 			}
 
 		case *sema.InvalidNestedResourceMoveError:
-			fmt.Println("ConformanceError")
-			fmt.Println(v)
-			inner := fixer.code[v.StartPosition().Offset : v.EndPosition(nil).Offset+1]
+			fmt.Println("ConformanceError", v)
 
-			fmt.Println(inner)
-
-			elem := FindElement(program, v.StartPosition(), ast.ElementTypeCastingExpression)
+			elem := FindElement(fixer.program, v.StartPosition(), ast.ElementTypeCastingExpression)
 			if elem == nil {
 				//TODO: check me
 				break
@@ -634,42 +693,19 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 			casting, isCasting := elem.(*ast.CastingExpression)
 			if isCasting {
 				fmt.Println("Fixing nested resource move")
-				//replacement := strings.ReplaceAll(inner, v.ActualType.QualifiedString(), v.ExpectedType.QualifiedString())
-				fmt.Println(casting.String())
-				fmt.Printf("t2: %T\n", casting.Expression)
 
 				if referenceExpression, ok := casting.Expression.(*ast.ReferenceExpression); ok {
-					fmt.Printf("%T\n", referenceExpression.Expression)
-					fmt.Println(referenceExpression.Expression.String())
 					if forced, ok := referenceExpression.Expression.(*ast.ForceExpression); ok {
-						fmt.Println("=========")
-						fmt.Printf("%T\n", forced.Expression)
-						fmt.Println("%s", forced.Expression.String())
-
-						fmt.Println(forced.Expression.String())
-						fmt.Println("it is forced")
 						replace := fixer.code[forced.StartPosition().Offset:forced.EndPosition(nil).Offset]
 						fixer.ReplaceElement(forced, replace)
 					}
 				}
 
-				//fmt.Println(replacement)
-				//fixer.ReplaceElement(v, replacement)
 			}
 
-			/*
-				_, isCasting := v.Expression.(*ast.CastingExpression)
-				if isCasting {
-					fmt.Println("Fixing Casting")
-					replacement := strings.ReplaceAll(inner, v.ActualType.QualifiedString(), v.ExpectedType.QualifiedString())
-					fmt.Println(inner)
-					fmt.Println(replacement)
-					fixer.ReplaceElement(v, replacement)
-				}*/
-
 		case *sema.ConformanceError:
-			fmt.Println("ConformanceError")
-			fmt.Println(v)
+			fmt.Println("ConformanceError", v)
+
 			if len(v.MissingMembers) > 0 {
 				fmt.Println("Fixing Conformances")
 				missing := v.MissingMembers[0]
@@ -677,8 +713,15 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 					newCode := strings.ReplaceAll(missing.TypeAnnotation.QualifiedString(), "fun", fmt.Sprintf("fun %s", missing.Identifier.String()))
 					newCode = fmt.Sprintf("access(%s) ", missing.Access.String()) + newCode
 
+					fmt.Println(v.CompositeDeclaration.DeclarationIdentifier().Identifier)
+					fmt.Println(v.InterfaceType.QualifiedString())
 					if missing.Identifier.String() == "createEmptyCollection" {
-						newCode = newCode + "{\n return <-create Collection() \n}"
+						if v.InterfaceType.QualifiedString() == "NonFungibleToken.Collection" {
+							newCode = newCode + fmt.Sprintf("{\n return <-create %s() \n}", v.CompositeDeclaration.DeclarationIdentifier().Identifier)
+						} else {
+							newCode = newCode + "{\n return <-create Collection() \n}"
+						}
+
 					} else if missing.Identifier.String() == "getLength" {
 						newCode = newCode + "{\n return self.ownedNFTs.length \n}"
 					} else if missing.Identifier.String() == "createEmptyVault" {
@@ -689,7 +732,7 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 						newCode = newCode + "{\n panic(\"implement me\") \n}"
 					}
 
-					fixer.code = AddFunctionToComposite(fixer.code, program, newCode, v.StartPosition())
+					fixer.code = AddFunctionToComposite(fixer.code, fixer.program, newCode, v.StartPosition())
 					fixer.appliedFix = true
 					break
 				}
@@ -715,7 +758,7 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 					if err == nil {
 						fmt.Println("fixing to stardard")
 						oldcode := fixer.code
-						fixer.code = ReplaceFunction(fixer.code, program, mismatch.CompositeMember, mismatch.InterfaceMember, false)
+						fixer.code = ReplaceFunction(fixer.code, fixer.program, mismatch.CompositeMember, mismatch.InterfaceMember, false)
 						fixer.appliedFix = fixer.code != oldcode
 					}
 					break
@@ -723,7 +766,7 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 					fmt.Println("same contract")
 					//reverse
 					oldcode := fixer.code
-					fixer.code = ReplaceFunction(fixer.code, program, mismatch.InterfaceMember, mismatch.CompositeMember, true)
+					fixer.code = ReplaceFunction(fixer.code, fixer.program, mismatch.InterfaceMember, mismatch.CompositeMember, true)
 					fixer.appliedFix = fixer.code != oldcode
 					break
 				}
@@ -733,13 +776,14 @@ func (fixer *AstFixer) CheckAndFix(path string) (bool, string) {
 		default:
 			fmt.Println("ERR:", v)
 			fmt.Printf("%T\n", v)
-			//fixer.appliedFix = false
 		}
 
 		if fixer.appliedFix {
 			break
 		}
 	}
+
+	fixer.currentChecker = checker
 
 	return fixer.appliedFix, fixer.code
 
@@ -756,9 +800,17 @@ func (fixer *AstFixer) ReplaceElement(old ast.HasPosition, replacement string) {
 
 func (fixer *AstFixer) InsertElement(old ast.HasPosition, replacement string) {
 	fmt.Println("find:", fixer.code[old.StartPosition().Offset:old.EndPosition(nil).Offset+1])
-	fmt.Println("replace:", replacement)
+	fmt.Println("insert:", replacement)
 	pre := fixer.code[:old.StartPosition().Offset]
 	post := fixer.code[old.StartPosition().Offset:]
+	fixer.appliedFix = true
+	fixer.code = fmt.Sprintf("%s%s%s", pre, replacement, post)
+}
+func (fixer *AstFixer) AppendElement(old ast.HasPosition, replacement string) {
+	fmt.Println("find:", fixer.code[old.StartPosition().Offset:old.EndPosition(nil).Offset+1])
+	fmt.Println("append:", replacement)
+	pre := fixer.code[:old.EndPosition(nil).Offset+1]
+	post := fixer.code[old.EndPosition(nil).Offset+1:]
 	fixer.appliedFix = true
 	fixer.code = fmt.Sprintf("%s%s%s", pre, replacement, post)
 }
@@ -777,6 +829,8 @@ func (fixer *AstFixer) fixImports(imp *ast.ImportDeclaration) {
 		fmt.Println("- Using replacement")
 
 		relPath, _ := filepath.Rel(path.Dir(fixer.path), libPath)
+
+		fixer.addedImports[identifier] = true
 
 		fixer.ReplaceElement(imp,
 			fmt.Sprintf("import %s from \"./%s\"", identifier, relPath),
@@ -798,6 +852,10 @@ func (fixer *AstFixer) fixImports(imp *ast.ImportDeclaration) {
 }
 
 func (fixer *AstFixer) fixConformances(composite *ast.CompositeDeclaration) {
+
+	if composite.CompositeKind == common.CompositeKindContract {
+		fixer.contractName = composite.Identifier.Identifier
+	}
 
 	for _, conf := range composite.ConformanceList() {
 		if fixer.appliedFix {
@@ -843,6 +901,18 @@ func (fixer *AstFixer) fixConformances(composite *ast.CompositeDeclaration) {
 }
 
 func (fixer *AstFixer) fixSpecialFunction(function *ast.SpecialFunctionDeclaration) {
+	//add view purity if needed
+	composite, ok := FindElement(fixer.program, function.StartPosition(), ast.ElementTypeCompositeDeclaration).(*ast.CompositeDeclaration)
+	if ok {
+		if _, ok := fixer.needsPurity[composite.Identifier.Identifier]; ok {
+			if function.FunctionDeclaration.Purity != ast.FunctionPurityView {
+				function.FunctionDeclaration.Purity = ast.FunctionPurityView
+				fmt.Println("updating purity")
+				fixer.InsertElement(function, "view ")
+				return
+			}
+		}
+	}
 
 	if fixer.replaceFunctions {
 		fmt.Println("Replacing function with stub: ", function.DeclarationIdentifier().Identifier)
@@ -856,7 +926,6 @@ func (fixer *AstFixer) fixSpecialFunction(function *ast.SpecialFunctionDeclarati
 }
 
 func (fixer *AstFixer) fixFunction(function *ast.FunctionDeclaration) {
-
 	//remote legacy `destroy()`
 	if function.DeclarationIdentifier().Identifier == "LEGACY_destroy" {
 		fixer.ReplaceElement(function, "")
@@ -865,11 +934,10 @@ func (fixer *AstFixer) fixFunction(function *ast.FunctionDeclaration) {
 
 	//add view purity if needed
 	if _, ok := fixer.needsPurity[function.DeclarationIdentifier().Identifier]; ok {
-		fmt.Println("needs purity")
+		fmt.Println("needsPurity:", function.DeclarationIdentifier().Identifier)
+
 		if function.Purity != ast.FunctionPurityView {
 			function.Purity = ast.FunctionPurityView
-			fmt.Println("updating purity")
-			fmt.Println(function.String())
 			fixer.ReplaceElement(function, function.String())
 			return
 		}
@@ -912,6 +980,14 @@ func (fixer *AstFixer) fixInvocation(invocation *ast.InvocationExpression) {
 
 		fixer.ReplaceElement(invocation, invocation.String())
 	}
+
+	if strings.HasSuffix(invocation.InvokedExpression.String(), ".borrowViewResolver") {
+		elem := FindElement(fixer.program, invocation.EndPosition(nil), ast.ElementTypeForceExpression)
+		if elem == nil {
+			fixer.AppendElement(invocation, "!")
+		}
+	}
+
 }
 
 func (fixer *AstFixer) walker(element ast.Element) {
@@ -1039,8 +1115,6 @@ func ReplaceFunction(data string, program *ast.Program, compositeMember *sema.Me
 		if same && !strings.Contains(code, "view") && strings.Contains(inner, "view") {
 			return data
 		}
-		fmt.Println(code)
-		fmt.Println(inner)
 
 		return pre + code + post
 	}
