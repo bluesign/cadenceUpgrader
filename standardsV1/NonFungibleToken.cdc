@@ -8,6 +8,17 @@ The interface that all Non-Fungible Token contracts should conform to.
 If a user wants to deploy a new NFT contract, their contract should implement
 The types defined here
 
+/// Contributors (please add to this list if you contribute!):
+/// - Joshua Hannan - https://github.com/joshuahannan
+/// - Bastian Müller - https://twitter.com/turbolent
+/// - Dete Shirley - https://twitter.com/dete73
+/// - Bjarte Karlsen - https://twitter.com/0xBjartek
+/// - Austin Kline - https://twitter.com/austin_flowty
+/// - Giovanni Sanchez - https://twitter.com/gio_incognito
+/// - Deniz Edincik - https://twitter.com/bluesign
+///
+/// Repo reference: https://github.com/onflow/flow-nft
+
 ## `NFT` resource interface
 
 The core resource type that represents an NFT in the smart contract.
@@ -36,7 +47,7 @@ Collection to complete the transfer.
 
 */
 
-import ViewResolver from "./ViewResolver.cdc"
+import "./ViewResolver.cdc"
 
 /// The main NFT contract. Other NFT contracts will
 /// import and implement the interfaces defined in this contract
@@ -49,9 +60,6 @@ access(all) contract interface NonFungibleToken: ViewResolver {
     /// An entitlement for allowing updates and update events for an NFT
     access(all) entitlement Update
 
-    /// entitlement for owner that grants Withdraw and Update
-    access(all) entitlement Owner
-
     /// Event that contracts should emit when the metadata of an NFT is updated
     /// It can only be emitted by calling the `emitNFTUpdated` function
     /// with an `Updatable` entitled reference to the NFT that was updated
@@ -63,7 +71,7 @@ access(all) contract interface NonFungibleToken: ViewResolver {
     /// and query the updated metadata from the owners' collections.
     ///
     access(all) event Updated(type: String, id: UInt64, uuid: UInt64, owner: Address?)
-    access(contract) view fun emitNFTUpdated(_ nftRef: auth(Update | Owner) &{NonFungibleToken.NFT})
+    access(all) view fun emitNFTUpdated(_ nftRef: auth(Update) &{NonFungibleToken.NFT})
     {
         emit Updated(type: nftRef.getType().identifier, id: nftRef.id, uuid: nftRef.uuid, owner: nftRef.owner?.address)
     }
@@ -85,9 +93,6 @@ access(all) contract interface NonFungibleToken: ViewResolver {
     ///
     access(all) event Deposited(type: String, id: UInt64, uuid: UInt64, to: Address?, collectionUUID: UInt64)
 
-    /// Included for backwards-compatibility
-    access(all) resource interface INFT: NFT {}
-
     /// Interface that the NFTs must conform to
     ///
     access(all) resource interface NFT: ViewResolver.Resolver {
@@ -105,6 +110,7 @@ access(all) contract interface NonFungibleToken: ViewResolver {
         access(all) fun createEmptyCollection(): @{Collection} {
             post {
                 result.getLength() == 0: "The created collection must be empty!"
+                result.isSupportedNFTType(type: self.getType()): "The created collection must support this NFT type"
             }
         }
 
@@ -141,7 +147,7 @@ access(all) contract interface NonFungibleToken: ViewResolver {
         /// withdraw removes an NFT from the collection and moves it to the caller
         /// It does not specify whether the ID is UUID or not
         /// @param withdrawID: The id of the NFT to withdraw from the collection
-        access(Withdraw | Owner) fun withdraw(withdrawID: UInt64): @{NFT} {
+        access(Withdraw) fun withdraw(withdrawID: UInt64): @{NFT} {
             post {
                 result.id == withdrawID: "The ID of the withdrawn token must be the same as the requested ID"
                 emit Withdrawn(type: result.getType().identifier, id: result.id, uuid: result.uuid, from: self.owner?.address, providerUUID: self.uuid)
@@ -160,17 +166,13 @@ access(all) contract interface NonFungibleToken: ViewResolver {
         /// getSupportedNFTTypes returns a list of NFT types that this receiver accepts
         /// @return A dictionary of types mapped to booleans indicating if this
         ///         reciever supports it
-        access(all) view fun getSupportedNFTTypes(): {Type: Bool}{
-                return {}
-            }
+        access(all) view fun getSupportedNFTTypes(): {Type: Bool}
 
         /// Returns whether or not the given type is accepted by the collection
         /// A collection that can accept any type should just return true by default
         /// @param type: An NFT type
         /// @return A boolean indicating if this receiver can recieve the desired NFT type
-        access(all) view fun isSupportedNFTType(type: Type): Bool{
-                return self.getSupportedNFTTypes().containsKey(type)
-        }
+        access(all) view fun isSupportedNFTType(type: Type): Bool
     }
 
     /// Kept for backwards-compatibility reasons
@@ -178,6 +180,7 @@ access(all) contract interface NonFungibleToken: ViewResolver {
         access(all) fun deposit(token: @{NFT})
         access(all) view fun getLength(): Int
         access(all) view fun getIDs(): [UInt64]
+        access(all) fun forEachID(_ f: fun (UInt64): Bool): Void
         access(all) view fun borrowNFT(_ id: UInt64): &{NFT}?
     }
 
@@ -185,6 +188,8 @@ access(all) contract interface NonFungibleToken: ViewResolver {
     /// to be declared in the implementing contract
     ///
     access(all) resource interface Collection: Provider, Receiver, CollectionPublic, ViewResolver.ResolverCollection {
+
+        access(all) var ownedNFTs: @{UInt64: {NonFungibleToken.NFT}}
 
         /// deposit takes a NFT as an argument and stores it in the collection
         /// @param token: The NFT to deposit into the collection
@@ -200,8 +205,15 @@ access(all) contract interface NonFungibleToken: ViewResolver {
 
         /// Gets the amount of NFTs stored in the collection
         /// @return An integer indicating the size of the collection
-        access(all) view fun getLength(): Int{
-                return 0
+        access(all) view fun getLength(): Int {
+            return self.ownedNFTs.length
+        }
+
+        /// Allows a given function to iterate through the list
+        /// of owned NFT IDs in a collection without first
+        /// having to load the entire list into memory
+        access(all) fun forEachID(_ f: fun (UInt64): Bool): Void {
+            self.ownedNFTs.forEachKey(f)
         }
 
         /// Borrows a reference to an NFT stored in the collection

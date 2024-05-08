@@ -169,7 +169,7 @@ contract FLOATVerifiers{
 		access(all)
 		fun verify(_ params:{ String: AnyStruct}){ 
 			let claimee: Address = params["claimee"]! as! Address
-			let flowVault = (getAccount(claimee).capabilities.get<&FlowToken.Vault>(/public/flowTokenBalance)!).borrow() ?? panic("Could not borrow the Flow Token Vault")
+			let flowVault = getAccount(claimee).capabilities.get<&FlowToken.Vault>(/public/flowTokenBalance).borrow<&FlowToken.Vault>() ?? panic("Could not borrow the Flow Token Vault")
 			assert(flowVault.balance >= self.amount, message: "You do not meet the minimum required Flow Token balance.")
 		}
 		
@@ -194,7 +194,7 @@ contract FLOATVerifiers{
 		access(all)
 		fun verify(_ params:{ String: AnyStruct}){ 
 			let claimee: Address = params["claimee"]! as! Address
-			if let achievementBoard = (getAccount(claimee).capabilities.get<&FLOATEventSeries.AchievementBoard>(FLOATEventSeries.FLOATAchievementBoardPublicPath)!).borrow(){ 
+			if let achievementBoard = getAccount(claimee).capabilities.get<&FLOATEventSeries.AchievementBoard>(FLOATEventSeries.FLOATAchievementBoardPublicPath).borrow<&FLOATEventSeries.AchievementBoard>(){ 
 				// build goal status by different ways
 				if let record = achievementBoard.borrowAchievementRecordRef(host: self.challengeIdentifier.host, seriesId: self.challengeIdentifier.id){ 
 					assert(record.score >= self.challengeThresholdPoints, message: "You do not meet the minimum required Achievement Point for Challenge#".concat(self.challengeIdentifier.id.toString()))

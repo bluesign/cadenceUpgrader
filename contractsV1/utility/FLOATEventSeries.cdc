@@ -268,11 +268,8 @@ contract FLOATEventSeries{
 				FLOATEventSeries.getTokenDefinition(self.identifier) ?? panic("Unknown token")
 			assert(!tokenInfo.isNFT, message: "The token should be Fungible Token")
 			let receiverVault =
-				(
-					getAccount(self.address).capabilities.get<&{FungibleToken.Receiver}>(
-						tokenInfo.path
-					)!
-				).borrow()
+				getAccount(self.address).capabilities.get<&{FungibleToken.Receiver}>(tokenInfo.path)
+					.borrow<&{FungibleToken.Receiver}>()
 				?? panic(
 					"Could not borrow the &{FungibleToken.Receiver} from ".concat(
 						self.address.toString()
@@ -292,11 +289,9 @@ contract FLOATEventSeries{
 				FLOATEventSeries.getTokenDefinition(self.identifier) ?? panic("Unknown token")
 			assert(tokenInfo.isNFT, message: "The token should be Non-Fungiable Token")
 			let collection =
-				(
-					getAccount(self.address).capabilities.get<&{NonFungibleToken.CollectionPublic}>(
-						tokenInfo.path
-					)!
-				).borrow()
+				getAccount(self.address).capabilities.get<&{NonFungibleToken.CollectionPublic}>(
+					tokenInfo.path
+				).borrow<&{NonFungibleToken.CollectionPublic}>()
 				?? panic(
 					"Could not borrow the &{NonFungibleToken.CollectionPublic} from ".concat(
 						self.address.toString()
@@ -333,11 +328,9 @@ contract FLOATEventSeries{
 		access(all)
 		fun getEventPublic(): &FLOAT.FLOATEvent{ 
 			let ownerEvents =
-				(
-					getAccount(self.host).capabilities.get<&FLOAT.FLOATEvents>(
-						FLOAT.FLOATEventsPublicPath
-					)!
-				).borrow()
+				getAccount(self.host).capabilities.get<&FLOAT.FLOATEvents>(
+					FLOAT.FLOATEventsPublicPath
+				).borrow<&FLOAT.FLOATEvents>()
 				?? panic("Could not borrow the public FLOATEvents.")
 			return ownerEvents.borrowPublicEventRef(eventId: self.eventId)
 			?? panic("Failed to get event reference.")
@@ -370,11 +363,9 @@ contract FLOATEventSeries{
 		access(all)
 		fun getEventSeriesPublic(): &FLOATEventSeries.EventSeries{ 
 			let ref =
-				(
-					getAccount(self.host).capabilities.get<&EventSeriesBuilder>(
-						FLOATEventSeries.FLOATEventSeriesBuilderPublicPath
-					)!
-				).borrow()
+				getAccount(self.host).capabilities.get<&EventSeriesBuilder>(
+					FLOATEventSeries.FLOATEventSeriesBuilderPublicPath
+				).borrow<&EventSeriesBuilder>()
 				?? panic("Could not borrow the public EventSeriesBuilderPublic.")
 			return ref.borrowEventSeriesPublic(seriesId: self.id)
 			?? panic("Failed to get event series reference.")
@@ -1104,7 +1095,7 @@ contract FLOATEventSeries{
 		}
 		
 		// withdraw removes an NFT from the collection and moves it to the caller
-		access(NonFungibleToken.Withdraw |NonFungibleToken.Owner)
+		access(NonFungibleToken.Withdraw)
 		fun withdraw(withdrawID: UInt64): @{NonFungibleToken.NFT}{ 
 			let token <- self.depositedNFTs.remove(key: withdrawID) ?? panic("missing NFT")
 			return <-token
@@ -1132,8 +1123,13 @@ contract FLOATEventSeries{
 		}
 		
 		access(all)
-		fun createEmptyCollection(): @{NonFungibleToken.Collection}{ 
-			return <-create TreasuryCollection()
+		view fun getSupportedNFTTypes():{ Type: Bool}{ 
+			panic("implement me")
+		}
+		
+		access(all)
+		view fun isSupportedNFTType(type: Type): Bool{ 
+			panic("implement me")
 		}
 	}
 	
@@ -1947,7 +1943,7 @@ contract FLOATEventSeries{
 		access(all)
 		fun registerToken(path: PublicPath, isNFT: Bool){ 
 			// register token from owner's capability
-			let tokenCap = (self.owner!).capabilities.get_<YOUR_TYPE>(path)!
+			let tokenCap = (self.owner!).capabilities.get_<YOUR_TYPE>(path)
 			if isNFT{ 
 				let collection = tokenCap.borrow<&{NonFungibleToken.CollectionPublic}>() ?? panic("Could not borrow the &{NonFungibleToken.CollectionPublic}")
 				let id = collection.getIDs().removeFirst()

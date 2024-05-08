@@ -134,7 +134,7 @@ contract FLOAT: NonFungibleToken, ViewResolver{
 	
 	// Represents a FLOAT
 	access(all)
-	resource NFT: NonFungibleToken.INFT, ViewResolver.Resolver{ 
+	resource NFT: NonFungibleToken.NFT, ViewResolver.Resolver{ 
 		// The `uuid` of this resource
 		access(all)
 		let id: UInt64
@@ -235,8 +235,8 @@ contract FLOAT: NonFungibleToken, ViewResolver{
 				case Type<MetadataViews.Display>():
 					return MetadataViews.Display(name: self.eventName, description: self.eventDescription, thumbnail: MetadataViews.HTTPFile(url: "https://nftstorage.link/ipfs/".concat(self.getImage())))
 				case Type<MetadataViews.Royalties>():
-					return MetadataViews.Royalties([MetadataViews.Royalty(receiver: getAccount(0x5643fd47a29770e7).capabilities.get<&FlowToken.Vault>(/public/flowTokenReceiver)!, cut: 0.05, // 5% royalty on secondary sales																																															  
-																																															  description: "Emerald City DAO receives a 5% royalty from secondary sales because this NFT was created using FLOAT (https://floats.city/), a proof of attendance platform created by Emerald City DAO.")])
+					return MetadataViews.Royalties([MetadataViews.Royalty(receiver: getAccount(0x5643fd47a29770e7).capabilities.get<&FlowToken.Vault>(/public/flowTokenReceiver), cut: 0.05, // 5% royalty on secondary sales																																															 
+																																															 description: "Emerald City DAO receives a 5% royalty from secondary sales because this NFT was created using FLOAT (https://floats.city/), a proof of attendance platform created by Emerald City DAO.")])
 				case Type<MetadataViews.ExternalURL>():
 					return MetadataViews.ExternalURL("https://floats.city/".concat((self.owner!).address.toString()).concat("/float/").concat(self.id.toString()))
 				case Type<MetadataViews.NFTCollectionData>():
@@ -362,7 +362,7 @@ contract FLOAT: NonFungibleToken, ViewResolver{
 			self.ownedNFTs[id] <-! nft
 		}
 		
-		access(NonFungibleToken.Withdraw |NonFungibleToken.Owner)
+		access(NonFungibleToken.Withdraw)
 		fun withdraw(withdrawID: UInt64): @{NonFungibleToken.NFT}{ 
 			let token <- self.ownedNFTs.remove(key: withdrawID) ?? panic("You do not own this FLOAT in your collection")
 			let nft <- token as! @NFT
@@ -454,6 +454,16 @@ contract FLOAT: NonFungibleToken, ViewResolver{
 			let tokenRef = (&self.ownedNFTs[id] as &{NonFungibleToken.NFT}?)!
 			let nftRef = tokenRef as! &NFT
 			return nftRef as &{ViewResolver.Resolver}
+		}
+		
+		access(all)
+		view fun getSupportedNFTTypes():{ Type: Bool}{ 
+			panic("implement me")
+		}
+		
+		access(all)
+		view fun isSupportedNFTType(type: Type): Bool{ 
+			panic("implement me")
 		}
 		
 		access(all)
@@ -903,9 +913,9 @@ contract FLOAT: NonFungibleToken, ViewResolver{
 			let emeraldCityTreasury: Address = 0x5643fd47a29770e7
 			let paymentType: String = payment.getType().identifier
 			let tokenInfo: TokenInfo = (self.getPrices()!)[paymentType]!
-			let EventHostVault = (getAccount(self.host).capabilities.get<&{FungibleToken.Receiver}>(tokenInfo.path)!).borrow() ?? panic("Could not borrow the &{FungibleToken.Receiver} from the event host.")
+			let EventHostVault = getAccount(self.host).capabilities.get<&{FungibleToken.Receiver}>(tokenInfo.path).borrow<&{FungibleToken.Receiver}>() ?? panic("Could not borrow the &{FungibleToken.Receiver} from the event host.")
 			assert(EventHostVault.getType().identifier == paymentType, message: "The event host's path is not associated with the intended token.")
-			let EmeraldCityVault = (getAccount(emeraldCityTreasury).capabilities.get<&{FungibleToken.Receiver}>(tokenInfo.path)!).borrow() ?? panic("Could not borrow the &{FungibleToken.Receiver} from Emerald City's Vault.")
+			let EmeraldCityVault = getAccount(emeraldCityTreasury).capabilities.get<&{FungibleToken.Receiver}>(tokenInfo.path).borrow<&{FungibleToken.Receiver}>() ?? panic("Could not borrow the &{FungibleToken.Receiver} from Emerald City's Vault.")
 			assert(EmeraldCityVault.getType().identifier == paymentType, message: "Emerald City's path is not associated with the intended token.")
 			let emeraldCityCut <- payment.withdraw(amount: payment.balance * royalty)
 			EmeraldCityVault.deposit(from: <-emeraldCityCut)

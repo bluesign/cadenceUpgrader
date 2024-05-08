@@ -211,7 +211,8 @@ func NewAstFixer(path string, code string, replaceFunctions bool) *AstFixer {
 	program, err := parser.ParseProgram(nil, []byte(code), parser.Config{})
 	if err != nil {
 		fmt.Println(path)
-		panic(err)
+		//panic(err)
+
 	}
 
 	return &AstFixer{
@@ -374,10 +375,10 @@ func (fixer *AstFixer) CheckAndFixOne(path string) (bool, string) {
 				case "getCapability":
 					elem := FindElement(fixer.program, v.StartPosition(), ast.ElementTypeInvocationExpression)
 					invocation := elem.(*ast.InvocationExpression)
-					replacement := strings.ReplaceAll(invocation.String(), "getCapability", "capabilities.get") + "!"
+					replacement := strings.ReplaceAll(invocation.String(), "getCapability", "capabilities.get")
 
 					if !strings.Contains(invocation.String(), "<") {
-						replacement = strings.ReplaceAll(invocation.String(), "getCapability", "capabilities.get_<YOUR_TYPE>") + "!"
+						replacement = strings.ReplaceAll(invocation.String(), "getCapability", "capabilities.get_<YOUR_TYPE>")
 						pos := v.EndPosition(nil)
 						next_invocation, _ := FindElement(fixer.program, pos, ast.ElementTypeInvocationExpression).(*ast.InvocationExpression)
 
@@ -393,7 +394,7 @@ func (fixer *AstFixer) CheckAndFixOne(path string) (bool, string) {
 							replacement = strings.ReplaceAll(invocation.String(),
 								"getCapability",
 								fmt.Sprintf("capabilities.get<%s>", next_invocation.TypeArguments[0].String()),
-							) + "!"
+							)
 						}
 					}
 
@@ -874,7 +875,12 @@ func (fixer *AstFixer) fixConformances(composite *ast.CompositeDeclaration) {
 			}
 
 		//add NonFungibleToken.Collection as conformance if resource implements NonFungibleToken.CollectionPublic
+		//fix INFT
 		case "NonFungibleToken":
+			if len(conf.NestedIdentifiers) > 0 && conf.NestedIdentifiers[0].Identifier == "INFT" {
+				fixer.ReplaceElement(conf.NestedIdentifiers[0], "NFT")
+				break
+			}
 
 			if len(conf.NestedIdentifiers) > 0 && conf.NestedIdentifiers[0].Identifier == "CollectionPublic" {
 				//check if already fixed
