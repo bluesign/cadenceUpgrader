@@ -1,7 +1,5 @@
 import NonFungibleToken from "./../../standardsV1/NonFungibleToken.cdc"
 
-import ViewResolver from "../../standardsV1/ViewResolver.cdc"
-
 import MetadataViews from "./../../standardsV1/MetadataViews.cdc"
 
 access(all)
@@ -168,7 +166,7 @@ contract EpisodeNFT: NonFungibleToken{
 		}
 		
 		access(all)
-		view fun getViews(): [Type]{ 
+		fun getViews(): [Type]{ 
 			return [Type<MetadataViews.Display>(), Type<MetadataViews.ExternalURL>(), Type<MetadataViews.NFTCollectionDisplay>()]
 		}
 		
@@ -217,7 +215,7 @@ contract EpisodeNFT: NonFungibleToken{
 		fun getMetadatadata(id: UInt64): Metadata
 		
 		access(all)
-		view fun borrowViewResolver(id: UInt64): &{ViewResolver.Resolver}?
+		fun borrowViewResolver(id: UInt64): &EpisodeNFT.NFT
 		
 		access(all)
 		fun buy(collectionCapability: Capability<&Collection>, episodeID: String)
@@ -311,10 +309,10 @@ contract EpisodeNFT: NonFungibleToken{
 		}
 		
 		access(all)
-		view fun borrowViewResolver(id: UInt64): &{ViewResolver.Resolver}?{ 
+		fun borrowViewResolver(id: UInt64): &EpisodeNFT.NFT{ 
 			let token = (&self.ownedNFTs[id] as &{NonFungibleToken.NFT}?)!
 			let nft = token as! &NFT
-			return nft as &{ViewResolver.Resolver}?
+			return nft as &EpisodeNFT.NFT
 		}
 		
 		access(all)

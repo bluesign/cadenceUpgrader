@@ -321,7 +321,7 @@ contract TSF{
 		}
 		
 		access(all)
-		view fun getViews(): [Type]{ 
+		fun getViews(): [Type]{ 
 			return []
 		}
 		

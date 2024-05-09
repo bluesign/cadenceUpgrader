@@ -90,7 +90,7 @@ contract Inscription: NonFungibleToken, ViewResolver{
 		///		 developers to know which parameter to pass to the resolveView() method.
 		///
 		access(all)
-		view fun getViews(): [Type]{ 
+		fun getViews(): [Type]{ 
 			return [Type<InscriptionMetadata.InscriptionView>()]
 		}
 		

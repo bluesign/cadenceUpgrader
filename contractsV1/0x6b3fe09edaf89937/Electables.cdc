@@ -195,7 +195,7 @@ contract Electables: NonFungibleToken{
 		}
 		
 		access(all)
-		view fun borrowViewResolver(id: UInt64): &{ViewResolver.Resolver}?{ 
+		fun borrowViewResolver(id: UInt64): &{ViewResolver.Resolver}{ 
 			let nft = &self.ownedNFTs[id] as &{NonFungibleToken.NFT}?
 			let electable = nft as! &Electables.NFT
 			return electable as &{ViewResolver.Resolver}

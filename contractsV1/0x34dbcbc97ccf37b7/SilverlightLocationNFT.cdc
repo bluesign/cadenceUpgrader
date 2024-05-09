@@ -407,7 +407,7 @@ contract SilverlightLocationNFT: NonFungibleToken{
 		// MetadataViews 
 		//
 		access(all)
-		view fun borrowViewResolver(id: UInt64): &{ViewResolver.Resolver}?{ 
+		fun borrowViewResolver(id: UInt64): &{ViewResolver.Resolver}{ 
 			let nft = (&self.ownedNFTs[id] as &{NonFungibleToken.NFT}?)!
 			let locationNFT = nft as! &SilverlightLocationNFT.NFT
 			return locationNFT // as &AnyResource{MetadataViews.Resolver}
