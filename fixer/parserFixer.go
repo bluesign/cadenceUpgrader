@@ -41,6 +41,11 @@ func (fixer *ParseFixer) ParseAndFix() (bool, string, *ast.Program) {
 
 		case *parser.SyntaxErrorWithSuggestedReplacement:
 			fmt.Println("Applying suggestion: \n- ", v.SuggestedFix)
+			fmt.Println(v.SuggestedFix)
+
+			if v.SuggestedFix == "access(all)" {
+				v.SuggestedFix = "access(TMP_ENTITLEMENT_OWNER)"
+			}
 			fixer.ReplaceElement(v, v.SuggestedFix)
 
 		case *parser.CustomDestructorError:

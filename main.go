@@ -32,6 +32,9 @@ func main() {
 				newPath := strings.Replace(spath, "contracts/", "contractsV1/", 1)
 
 				identifier := path.Base(newPath)
+				if strings.Contains(identifier, "TenantService") {
+					return nil
+				}
 				libPath := fmt.Sprintf("./standardsV1/%s", identifier)
 				_, err := os.ReadFile(libPath)
 				if err != nil {

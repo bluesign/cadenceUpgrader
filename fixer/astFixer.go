@@ -2,15 +2,16 @@ package fixer
 
 import (
 	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+
 	"github.com/onflow/cadence/runtime/ast"
 	"github.com/onflow/cadence/runtime/common"
 	"github.com/onflow/cadence/runtime/parser"
 	"github.com/onflow/cadence/runtime/sema"
 	"github.com/onflow/cadence/runtime/stdlib"
-	"os"
-	"path"
-	"path/filepath"
-	"strings"
 )
 
 func FixFile(spath string, newFileNameFormatted string, code string) {
@@ -42,10 +43,26 @@ func FixFile(spath string, newFileNameFormatted string, code string) {
 	output := PrettyCode(string(code), 100, true)
 	fmt.Println("formatted")
 
+	header := `/*
+This tool adds a new entitlemtent called TMP_ENTITLEMENT_OWNER to some functions that it cannot be sure if it is safe to make access(all)
+those functions you should check and update their entitlemtents ( or change to all access )
+
+Please see: 
+https://cadence-lang.org/docs/cadence-migration-guide/nft-guide#update-all-pub-access-modfiers
+
+IMPORTANT SECURITY NOTICE
+Please familiarize yourself with the new entitlements feature because it is extremely important for you to understand in order to build safe smart contracts.
+If you change pub to access(all) without paying attention to potential downcasting from public interfaces, you might expose private functions like withdraw 
+that will cause security problems for your contract.
+
+*/
+
+	`
+
 	dir := path.Dir(newFileNameFormatted)
 	os.MkdirAll(dir, 0777)
 	os.Create(newFileNameFormatted)
-	os.WriteFile(newFileNameFormatted, []byte(output), 0644)
+	os.WriteFile(newFileNameFormatted, []byte(header+output), 0644)
 }
 
 func must(err error, location common.Location, codes map[common.Location][]byte) {
@@ -434,6 +451,29 @@ func (fixer *AstFixer) CheckAndFixOne(path string) (bool, string) {
 
 		case *sema.NotDeclaredError:
 			fmt.Println("Fixing Missing Declarations:", v.Name)
+
+			if v.Name == "TMP_ENTITLEMENT_OWNER" {
+
+				elem := FindElement(fixer.program, v.StartPosition(), ast.ElementTypeFunctionDeclaration)
+				if elem != nil {
+					break
+				}
+
+				elem = FindElement(fixer.program, v.StartPosition(), ast.ElementTypeFieldDeclaration)
+				if elem != nil {
+					fmt.Println("!!!!!!!!!!", elem)
+					fixer.ReplaceElement(v, "all")
+					break
+				}
+				elem = FindElement(fixer.program, v.StartPosition(), ast.ElementTypeCompositeDeclaration)
+				if elem != nil {
+
+					fmt.Println("!!!!!!!!!!!", elem, v)
+					fixer.ReplaceElement(v, "all")
+					break
+				}
+
+			}
 
 			if parser.IsHardKeyword(v.Name) {
 				fixer.ReplaceElement(v, "_"+v.Name)
