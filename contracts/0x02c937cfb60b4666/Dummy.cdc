@@ -1,1 +1,0 @@
-pub contract Dummy{}

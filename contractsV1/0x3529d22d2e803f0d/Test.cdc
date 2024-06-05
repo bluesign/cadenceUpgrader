@@ -1,2 +1,0 @@
-access(all)
-contract Test{}
